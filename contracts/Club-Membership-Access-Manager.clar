@@ -135,6 +135,17 @@
   )
 )
 
+(define-public (update-club-settings (new-name (string-ascii 50)) (new-basic-fee uint) (new-premium-fee uint) (new-vip-fee uint))
+  (begin
+    (asserts! (is-owner) err-owner-only)
+    (var-set club-name new-name)
+    (var-set membership-fee-basic new-basic-fee)
+    (var-set membership-fee-premium new-premium-fee)
+    (var-set membership-fee-vip new-vip-fee)
+    (ok true)
+  )
+)
+
 (define-public (register-member (tier uint))
   (let (
     (member-price (get-tier-price tier))

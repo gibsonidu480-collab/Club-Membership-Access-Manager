@@ -7,6 +7,10 @@
 (define-constant err-expired (err u105))
 (define-constant err-insufficient-payment (err u106))
 (define-constant err-invalid-duration (err u107))
+(define-constant err-self-referral (err u108))
+(define-constant err-referrer-not-active (err u109))
+
+(define-constant referral-reward-percent u10)
 
 (define-constant tier-basic u1)
 (define-constant tier-premium u2)
@@ -56,6 +60,22 @@
     duration-blocks: uint,
     max-guests: uint,
     priority-booking: bool
+  }
+)
+
+(define-map referral-stats
+  { wallet: principal }
+  {
+    total-referrals: uint,
+    total-rewards-earned: uint
+  }
+)
+
+(define-map referral-records
+  { referrer: principal, referred: principal }
+  {
+    reward-amount: uint,
+    block-height: uint
   }
 )
 
@@ -357,4 +377,76 @@
 
 (define-read-only (get-access-log (member-id uint) (timestamp uint))
   (map-get? access-logs { member-id: member-id, timestamp: timestamp })
+)
+
+(define-public (register-with-referral (tier uint) (referrer principal))
+  (let (
+    (member-price (get-tier-price tier))
+    (member-id (increment-member-id))
+    (duration (get-tier-duration tier))
+    (expiry (+ stacks-block-height duration))
+    (referrer-active (is-member-active referrer))
+    (reward-amount (/ (* member-price referral-reward-percent) u100))
+  )
+    (asserts! (is-valid-tier tier) err-invalid-tier)
+    (asserts! (not (is-eq tx-sender referrer)) err-self-referral)
+    (asserts! referrer-active err-referrer-not-active)
+    (asserts! (is-none (map-get? member-by-wallet { wallet: tx-sender })) err-already-exists)
+    (asserts! (>= (stx-get-balance tx-sender) member-price) err-insufficient-payment)
+    
+    (try! (stx-transfer? member-price tx-sender contract-owner))
+    
+    (map-set members { member-id: member-id }
+      {
+        wallet: tx-sender,
+        tier: tier,
+        expiry-block: expiry,
+        join-block: stacks-block-height,
+        active: true,
+        access-count: u0
+      }
+    )
+    
+    (map-set member-by-wallet { wallet: tx-sender } { member-id: member-id })
+    (var-set total-members (+ (var-get total-members) u1))
+    (var-set club-treasury (+ (var-get club-treasury) member-price))
+    
+    (try! (as-contract (stx-transfer? reward-amount tx-sender referrer)))
+    
+    (map-set referral-records { referrer: referrer, referred: tx-sender }
+      {
+        reward-amount: reward-amount,
+        block-height: stacks-block-height
+      }
+    )
+    
+    (match (map-get? referral-stats { wallet: referrer })
+      existing-stats
+        (map-set referral-stats { wallet: referrer }
+          {
+            total-referrals: (+ (get total-referrals existing-stats) u1),
+            total-rewards-earned: (+ (get total-rewards-earned existing-stats) reward-amount)
+          }
+        )
+      (map-set referral-stats { wallet: referrer }
+        {
+          total-referrals: u1,
+          total-rewards-earned: reward-amount
+        }
+      )
+    )
+    
+    (ok member-id)
+  )
+)
+
+(define-read-only (get-referral-stats (wallet principal))
+  (default-to
+    { total-referrals: u0, total-rewards-earned: u0 }
+    (map-get? referral-stats { wallet: wallet })
+  )
+)
+
+(define-read-only (get-referral-record (referrer principal) (referred principal))
+  (map-get? referral-records { referrer: referrer, referred: referred })
 )
